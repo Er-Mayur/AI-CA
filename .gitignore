@@ -3,3 +3,5 @@ venv
 frontend/node_modules
 .DS_Store
 .gitignore
+backend/.venv
+backend/uploads
