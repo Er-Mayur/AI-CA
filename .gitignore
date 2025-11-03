@@ -3,4 +3,5 @@ frontend/node_modules/
 .DS_Store
 backend/.venv/
 backend/uploads/
+backend/*.sqlite
 backend/aica.db
