@@ -5,3 +5,4 @@ frontend/node_modules
 .gitignore
 backend/.venv
 backend/uploads
+backend/aica.db
