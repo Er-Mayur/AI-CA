@@ -5,3 +5,5 @@ backend/.venv/
 backend/uploads/
 backend/*.sqlite
 backend/aica.db
+backend/*.db
+
