@@ -3,4 +3,9 @@ export default {
     tailwindcss: {},
     autoprefixer: {},
   },
+<<<<<<< HEAD
 };
+=======
+}
+
+>>>>>>> b699201 (RAG)
