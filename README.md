@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-# AI-CA Individual — MVP (FastAPI + Next.js)
+# AI-CA Individual — MVP (FastAPI + React.js)
 
 Features:
 - Register/Login (JWT)
@@ -401,7 +400,3 @@ For issues and questions:
 - Integration with income tax portal
 
 ---
-
-**Built with ❤️ using AI-powered technology for Indian taxpayers**
-
->>>>>>> b699201 (RAG)
