@@ -5,13 +5,13 @@ import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 import { Calculator, TrendingUp, Download, FileText, Info } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import jsPDF from 'jspdf'
 
 function TaxCalculation() {
   const { currentFY } = useAuth()
   const [computation, setComputation] = useState(null)
   const [loading, setLoading] = useState(true)
   const [calculating, setCalculating] = useState(false)
+  const [downloadingITR1, setDownloadingITR1] = useState(false)
 
   useEffect(() => {
     if (currentFY) {
@@ -43,58 +43,33 @@ function TaxCalculation() {
     }
   }
 
-  const handleDownloadPDF = () => {
+  const handleDownloadITR1Report = async () => {
     if (!computation) return
-
-    const doc = new jsPDF()
     
-    // Title
-    doc.setFontSize(20)
-    doc.text('Tax Computation Report', 20, 20)
+    setDownloadingITR1(true)
     
-    doc.setFontSize(12)
-    doc.text(`Financial Year: ${computation.financial_year}`, 20, 35)
-    doc.text(`Assessment Year: ${computation.assessment_year}`, 20, 42)
-    
-    // Income Details
-    doc.setFontSize(14)
-    doc.text('Income Details', 20, 55)
-    doc.setFontSize(11)
-    doc.text(`Gross Total Income: ₹${computation.gross_total_income.toLocaleString('en-IN')}`, 25, 65)
-    doc.text(`Salary Income: ₹${computation.salary_income.toLocaleString('en-IN')}`, 25, 72)
-    
-    // Old Regime
-    doc.setFontSize(14)
-    doc.text('Old Regime', 20, 85)
-    doc.setFontSize(11)
-    doc.text(`Taxable Income: ₹${computation.old_regime_taxable_income.toLocaleString('en-IN')}`, 25, 95)
-    doc.text(`Total Tax: ₹${computation.old_regime_total_tax.toLocaleString('en-IN')}`, 25, 102)
-    
-    // New Regime
-    doc.setFontSize(14)
-    doc.text('New Regime', 20, 115)
-    doc.setFontSize(11)
-    doc.text(`Taxable Income: ₹${computation.new_regime_taxable_income.toLocaleString('en-IN')}`, 25, 125)
-    doc.text(`Total Tax: ₹${computation.new_regime_total_tax.toLocaleString('en-IN')}`, 25, 132)
-    
-    // Recommendation
-    doc.setFontSize(14)
-    doc.text('Recommendation', 20, 145)
-    doc.setFontSize(11)
-    doc.text(`Recommended Regime: ${computation.recommended_regime}`, 25, 155)
-    doc.text(`Tax Savings: ₹${computation.tax_savings.toLocaleString('en-IN')}`, 25, 162)
-    doc.text(`Recommended ITR Form: ${computation.recommended_itr_form}`, 25, 169)
-    
-    // Final Tax
-    doc.setFontSize(14)
-    doc.text('Final Tax Liability', 20, 182)
-    doc.setFontSize(11)
-    doc.text(`Total TDS: ₹${computation.total_tds.toLocaleString('en-IN')}`, 25, 192)
-    doc.text(`Tax Payable: ₹${computation.tax_payable.toLocaleString('en-IN')}`, 25, 199)
-    doc.text(`Refund Amount: ₹${computation.refund_amount.toLocaleString('en-IN')}`, 25, 206)
-    
-    doc.save(`tax-computation-${currentFY}.pdf`)
-    toast.success('PDF downloaded successfully')
+    try {
+      const response = await api.get(`/tax/download-itr1/${currentFY}`, {
+        responseType: 'blob'
+      })
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `Helper_${currentFY.replace('-', '_')}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Helper Report downloaded')
+    } catch (error) {
+      console.error('Download error:', error)
+      toast.error(error.response?.data?.detail || 'Failed to download Helper report')
+    } finally {
+      setDownloadingITR1(false)
+    }
   }
 
   if (loading) {
@@ -131,11 +106,16 @@ function TaxCalculation() {
           </div>
           {computation && (
             <button
-              onClick={handleDownloadPDF}
+              onClick={handleDownloadITR1Report}
+              disabled={downloadingITR1}
               className="btn-primary flex items-center space-x-2"
             >
-              <Download className="w-5 h-5" />
-              <span>Download PDF</span>
+              {downloadingITR1 ? (
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+              ) : (
+                <Download className="w-5 h-5" />
+              )}
+              <span>Download Helper Report</span>
             </button>
           )}
         </div>
@@ -195,6 +175,47 @@ function TaxCalculation() {
                     <p className="font-semibold text-gray-900">Recommended ITR Form: {computation.recommended_itr_form}</p>
                     <p className="text-sm text-gray-600 mt-1">Use this form when filing your income tax return</p>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ITR-1 Filing Guide Card */}
+            <div className="card bg-blue-50 border-blue-200">
+              <div className="flex items-start space-x-4">
+                <FileText className="w-8 h-8 text-blue-600 mt-1" />
+                <div className="flex-1">
+                  <h3 className="text-xl font-semibold text-gray-900">Ready to File Your ITR?</h3>
+                  <p className="text-gray-700 mt-2">
+                    Download the <strong>Helper Report</strong> - a comprehensive PDF that maps all your tax data 
+                    to the official ITR form fields. Simply open this report alongside the Income Tax portal and fill 
+                    your return quickly with all values pre-calculated.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-4">
+                    <button
+                      onClick={handleDownloadITR1Report}
+                      disabled={downloadingITR1}
+                      className="btn-primary flex items-center space-x-2"
+                    >
+                      <FileText className="w-5 h-5" />
+                      <span>{downloadingITR1 ? 'Generating...' : 'Download Helper Report'}</span>
+                      {downloadingITR1 && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white ml-2"></div>}
+                    </button>
+                    <a
+                      href="https://www.incometax.gov.in"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-secondary flex items-center space-x-2"
+                    >
+                      <span>Go to Income Tax Portal</span>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-3">
+                    <Info className="w-3 h-3 inline mr-1" />
+                    The Helper Report contains: Personal Info, Income Details, Deductions, TDS Summary, Tax Computation, and Filing Instructions
+                  </p>
                 </div>
               </div>
             </div>

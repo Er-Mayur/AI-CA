@@ -7,7 +7,7 @@ import uvicorn
 
 from database import engine, get_db
 from models import Base
-from routers import auth, documents, tax, dashboard, qna, investments
+from routers import auth, documents, tax, dashboard, qna, investments, admin
 from seed_tax_rules import seed_tax_rules
 
 # Create database tables
@@ -40,6 +40,7 @@ app.include_router(tax.router, prefix="/api/tax", tags=["Tax Calculation"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(qna.router, prefix="/api/qna", tags=["Q&A"])
 app.include_router(investments.router, prefix="/api/investments", tags=["Investments"])
+app.include_router(admin.router, prefix="/api", tags=["Admin"])
 
 @app.get("/")
 def read_root():

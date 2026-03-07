@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
 from models import User, Document, TaxComputation, ActivityHistory, VerificationStatus
 from schemas import TaxComputationResponse, TaxComputationDetail
 from dependencies import get_current_user
 from utils.tax_calculator import calculate_comprehensive_tax, calculate_age
+from utils.helper_report_generator import generate_helper_report
+from utils.rules_service import RulesService, TaxRulesNotFoundError
+from utils.ollama_client import detect_itr_form_with_ai
 from datetime import datetime
 
 router = APIRouter()
@@ -150,10 +154,112 @@ def get_tax_computation(
     
     return computation
 
+
+@router.post("/detect-itr-form/{financial_year}")
+async def detect_itr_form(
+    financial_year: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Detect the correct ITR form type using AI.
+    
+    Analyzes uploaded documents (Form 16, AIS, Form 26AS) to determine
+    the appropriate ITR form based on Income Tax Act rules.
+    
+    Returns:
+        - itr_form: Recommended ITR form (ITR-1, ITR-2, ITR-3, ITR-4)
+        - reason: Detailed explanation
+        - detected_income_heads: Income breakdown
+        - eligibility_indicators: Factors that determined the form
+    """
+    
+    # Get all verified documents
+    documents = db.query(Document).filter(
+        Document.user_id == current_user.id,
+        Document.financial_year == financial_year,
+        Document.verification_status == VerificationStatus.VERIFIED
+    ).all()
+    
+    if not documents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No verified documents found. Please upload and verify documents first."
+        )
+    
+    # Aggregate extracted data from all documents
+    aggregated_data = aggregate_document_data(documents)
+    
+    # Prepare user data for detection
+    user_data = {
+        "financial_year": financial_year,
+        "is_resident": True,  # Default assumption
+        "pan_card": current_user.pan_card
+    }
+    
+    # Call AI to detect ITR form
+    try:
+        result = await detect_itr_form_with_ai(
+            aggregated_data=aggregated_data,
+            user_data=user_data,
+            financial_year=financial_year
+        )
+        
+        # Update computation with detected ITR form if it exists
+        computation = db.query(TaxComputation).filter(
+            TaxComputation.user_id == current_user.id,
+            TaxComputation.financial_year == financial_year
+        ).first()
+        
+        if computation:
+            computation.recommended_itr_form = result["itr_form"]
+            db.commit()
+        
+        # Log activity
+        activity = ActivityHistory(
+            user_id=current_user.id,
+            financial_year=financial_year,
+            activity_type="ITR_FORM_DETECTED",
+            description=f"AI detected ITR form: {result['itr_form']} - {result.get('detection_method', 'ai')}",
+            activity_metadata={
+                "itr_form": result["itr_form"],
+                "confidence": result.get("confidence", "unknown"),
+                "detection_method": result.get("detection_method", "ai"),
+                "key_factors": result.get("key_factors", [])
+            }
+        )
+        db.add(activity)
+        db.commit()
+        
+        return {
+            "success": True,
+            "financial_year": financial_year,
+            "itr_form": result["itr_form"],
+            "reason": result["reason"],
+            "detected_income_heads": result.get("detected_income_heads", {}),
+            "eligibility_indicators": result.get("eligibility_indicators", {}),
+            "key_factors": result.get("key_factors", []),
+            "warnings": result.get("warnings", []),
+            "confidence": result.get("confidence", "medium"),
+            "detection_method": result.get("detection_method", "ai")
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error detecting ITR form: {str(e)}"
+        )
+
+
 def aggregate_document_data(documents):
     """
     Comprehensive aggregation of data from multiple tax documents
     Combines Form 16, Form 26AS, and AIS data intelligently
+    
+    Extracts signals for ITR form type detection:
+    - Income from all sources
+    - TDS section codes
+    - Eligibility indicators (foreign assets, director status, etc.)
     """
     
     aggregated = {
@@ -166,16 +272,25 @@ def aggregate_document_data(documents):
         "capital_gains": 0,
         "capital_gains_short_term": 0,
         "capital_gains_long_term": 0,
+        "capital_gains_ltcg_112a": 0,  # LTCG under section 112A (equity)
         "other_income": 0,
         "interest_income": 0,
         "dividend_income": 0,
         "business_income": 0,
+        "professional_income": 0,
+        "agricultural_income": 0,
+        "crypto_income": 0,
+        "rental_income": 0,
         
         # TDS Details
         "total_tds": 0,
         "tds_on_salary": 0,
         "advance_tax_paid": 0,
         "self_assessment_tax": 0,
+        
+        # TDS Section codes (for ITR form detection)
+        "tds_sections": [],
+        "tds_details": {},
         
         # Exemptions (Section 10, 16)
         "exemptions": {
@@ -218,10 +333,21 @@ def aggregate_document_data(documents):
         "total_tax_liability": 0,
         "relief_89": 0,
         
-        # Flags
+        # === ITR FORM ELIGIBILITY FLAGS ===
         "has_capital_gains": False,
         "has_business_income": False,
         "has_foreign_assets": False,
+        "has_foreign_income": False,
+        "is_director_in_company": False,
+        "has_unlisted_equity": False,
+        "is_resident": True,
+        "num_house_properties": 1,
+        "multiple_house_properties": False,
+        
+        # Presumptive taxation flags
+        "has_presumptive_income_44ad": False,
+        "has_presumptive_income_44ada": False,
+        "has_presumptive_income_44ae": False,
     }
     
     for doc in documents:
@@ -377,14 +503,89 @@ def aggregate_document_data(documents):
                 _safe_float(data.get("self_assessment_tax", 0))
             )
             
-            # TDS details by section
+            # TDS details by section - Extract section codes for ITR form detection
             tds_details = data.get("tds_details", {})
             if isinstance(tds_details, dict):
+                # Merge TDS details
+                for section_key, amount in tds_details.items():
+                    if section_key not in aggregated["tds_details"]:
+                        aggregated["tds_details"][section_key] = 0
+                    aggregated["tds_details"][section_key] = max(
+                        aggregated["tds_details"][section_key],
+                        _safe_float(amount)
+                    )
+                    
+                    # Extract section code and add to list
+                    # Handle various formats: "salary_192", "192", "section_192"
+                    import re
+                    section_match = re.search(r'(\d+[A-Z]*)', str(section_key).upper())
+                    if section_match:
+                        section_code = section_match.group(1)
+                        if section_code not in aggregated["tds_sections"]:
+                            aggregated["tds_sections"].append(section_code)
+                
+                # Salary TDS (192)
                 salary_tds = _safe_float(tds_details.get("salary_192", 0))
+                if salary_tds == 0:
+                    salary_tds = _safe_float(tds_details.get("192", 0))
                 if salary_tds > 0:
                     aggregated["tds_on_salary"] = max(
                         aggregated["tds_on_salary"], salary_tds
                     )
+                    if "192" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("192")
+                
+                # Professional income detection (194J)
+                prof_tds = _safe_float(tds_details.get("194J", 0)) + _safe_float(tds_details.get("professional_194J", 0))
+                if prof_tds > 0:
+                    if "194J" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("194J")
+                    # Estimate professional income from TDS (assuming 10% TDS rate)
+                    estimated_prof_income = prof_tds / 0.1
+                    aggregated["professional_income"] = max(
+                        aggregated["professional_income"],
+                        estimated_prof_income
+                    )
+                    aggregated["has_business_income"] = True
+                
+                # Contractor income detection (194C)
+                contractor_tds = _safe_float(tds_details.get("194C", 0)) + _safe_float(tds_details.get("contractor_194C", 0))
+                if contractor_tds > 0:
+                    if "194C" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("194C")
+                    aggregated["has_business_income"] = True
+                
+                # Commission income detection (194H)
+                commission_tds = _safe_float(tds_details.get("194H", 0)) + _safe_float(tds_details.get("commission_194H", 0))
+                if commission_tds > 0:
+                    if "194H" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("194H")
+                    aggregated["has_business_income"] = True
+                
+                # Property sale detection (194IA)
+                property_tds = _safe_float(tds_details.get("194IA", 0)) + _safe_float(tds_details.get("property_sale_194IA", 0))
+                if property_tds > 0:
+                    if "194IA" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("194IA")
+                    aggregated["has_capital_gains"] = True
+                
+                # Crypto detection (194S)
+                crypto_tds = _safe_float(tds_details.get("194S", 0)) + _safe_float(tds_details.get("crypto_194S", 0))
+                if crypto_tds > 0:
+                    if "194S" not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append("194S")
+                    # Estimate crypto income (1% TDS rate)
+                    estimated_crypto = crypto_tds / 0.01
+                    aggregated["crypto_income"] = max(aggregated["crypto_income"], estimated_crypto)
+                    aggregated["has_capital_gains"] = True
+            
+            # Also check for TDS sections directly in the extracted data
+            tds_sections_raw = data.get("tds_sections", [])
+            if isinstance(tds_sections_raw, list):
+                for section in tds_sections_raw:
+                    section_str = str(section).upper()
+                    if section_str not in aggregated["tds_sections"]:
+                        aggregated["tds_sections"].append(section_str)
         
         # === AIS DATA ===
         elif doc_type_value == "AIS":
@@ -416,11 +617,63 @@ def aggregate_document_data(documents):
                 aggregated["capital_gains"] = aggregated["capital_gains_short_term"] + aggregated["capital_gains_long_term"]
                 aggregated["has_capital_gains"] = True
             
+            # LTCG under section 112A (equity/mutual funds)
+            ltcg_112a = _safe_float(data.get("capital_gains_ltcg_112a", 0))
+            if ltcg_112a == 0:
+                ltcg_112a = _safe_float(data.get("equity_ltcg", 0))
+            if ltcg_112a > 0:
+                aggregated["capital_gains_ltcg_112a"] = max(aggregated["capital_gains_ltcg_112a"], ltcg_112a)
+            
+            # Crypto/Virtual Digital Assets
+            crypto = _safe_float(data.get("crypto_income", 0))
+            if crypto == 0:
+                crypto = _safe_float(data.get("vda_income", 0))
+            if crypto > 0:
+                aggregated["crypto_income"] = max(aggregated["crypto_income"], crypto)
+                aggregated["has_capital_gains"] = True
+            
             # Business Income
             business = _safe_float(data.get("business_income", 0))
             if business > 0:
                 aggregated["business_income"] = max(aggregated["business_income"], business)
                 aggregated["has_business_income"] = True
+            
+            # Professional Income
+            professional = _safe_float(data.get("professional_income", 0))
+            if professional > 0:
+                aggregated["professional_income"] = max(aggregated["professional_income"], professional)
+                aggregated["has_business_income"] = True
+            
+            # Foreign assets/income detection
+            if data.get("foreign_assets") or data.get("has_foreign_assets"):
+                aggregated["has_foreign_assets"] = True
+            if data.get("foreign_income") or data.get("has_foreign_income"):
+                aggregated["has_foreign_income"] = True
+            foreign_income_value = _safe_float(data.get("foreign_income_value", 0))
+            if foreign_income_value > 0:
+                aggregated["has_foreign_income"] = True
+            
+            # Director status
+            if data.get("is_director") or data.get("is_director_in_company"):
+                aggregated["is_director_in_company"] = True
+            
+            # Unlisted equity
+            if data.get("unlisted_equity") or data.get("has_unlisted_equity"):
+                aggregated["has_unlisted_equity"] = True
+            
+            # House property count
+            hp_count = data.get("num_house_properties", 0)
+            if hp_count > 1:
+                aggregated["num_house_properties"] = max(aggregated["num_house_properties"], hp_count)
+                aggregated["multiple_house_properties"] = True
+            if data.get("multiple_house_properties"):
+                aggregated["multiple_house_properties"] = True
+                aggregated["num_house_properties"] = max(2, aggregated["num_house_properties"])
+            
+            # Agricultural income
+            agri = _safe_float(data.get("agricultural_income", 0))
+            if agri > 0:
+                aggregated["agricultural_income"] = max(aggregated["agricultural_income"], agri)
             
             # Other Income
             other = _safe_float(data.get("other_income", 0))
@@ -445,7 +698,8 @@ def aggregate_document_data(documents):
             aggregated["house_property_income"] +
             aggregated["capital_gains"] +
             aggregated["other_income"] +
-            aggregated["business_income"]
+            aggregated["business_income"] +
+            aggregated["professional_income"]
         )
     
     # Ensure standard deduction has reasonable defaults for salaried
@@ -460,6 +714,16 @@ def aggregate_document_data(documents):
     print(f"   Salary Income: ₹{aggregated['salary_income']:,.0f}")
     print(f"   Total TDS: ₹{aggregated['total_tds']:,.0f}")
     print(f"   Deductions found: {sum(v for k, v in aggregated['old_regime_deductions'].items() if isinstance(v, (int, float)) and v > 0)}")
+    
+    # Log ITR form detection signals
+    if aggregated["tds_sections"]:
+        print(f"   TDS Sections found: {aggregated['tds_sections']}")
+    if aggregated["has_capital_gains"]:
+        print(f"   Capital Gains: ₹{aggregated['capital_gains']:,.0f}")
+    if aggregated["has_business_income"]:
+        print(f"   Business/Professional Income detected")
+    if aggregated["has_foreign_assets"]:
+        print(f"   Foreign Assets detected")
     
     return aggregated
 
@@ -478,4 +742,146 @@ def _safe_float(value) -> float:
         except ValueError:
             return 0.0
     return 0.0
+
+
+@router.get("/download-itr1/{financial_year}")
+def download_itr1_report(
+    financial_year: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate and download ITR-1 helper PDF report.
+    
+    This PDF contains all data fields mapped to ITR-1 (SAHAJ) form fields,
+    making it easy for the user to fill the official form on the Income Tax portal.
+    """
+    
+    # Get existing tax computation
+    computation = db.query(TaxComputation).filter(
+        TaxComputation.user_id == current_user.id,
+        TaxComputation.financial_year == financial_year
+    ).first()
+    
+    if not computation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tax computation not found. Please calculate tax first."
+        )
+    
+    # Get all verified documents for aggregating data
+    documents = db.query(Document).filter(
+        Document.user_id == current_user.id,
+        Document.financial_year == financial_year,
+        Document.verification_status == VerificationStatus.VERIFIED
+    ).all()
+    
+    # Aggregate document data
+    documents_data = aggregate_document_data(documents)
+    
+    # Prepare user data
+    user_data = {
+        "name": current_user.name,
+        "pan_card": current_user.pan_card,
+        "email": current_user.email,
+        "date_of_birth": current_user.date_of_birth,
+        "gender": current_user.gender.value if current_user.gender else "",
+        "mobile": "",  # Not stored in current model
+    }
+    
+    # Convert computation to dict
+    computation_dict = {
+        "financial_year": computation.financial_year,
+        "assessment_year": computation.assessment_year,
+        "gross_total_income": computation.gross_total_income,
+        "salary_income": computation.salary_income,
+        "house_property_income": computation.house_property_income,
+        "capital_gains": computation.capital_gains,
+        "other_income": computation.other_income,
+        
+        # Old regime
+        "old_regime_deductions": computation.old_regime_deductions or {},
+        "old_regime_total_deductions": computation.old_regime_total_deductions,
+        "old_regime_taxable_income": computation.old_regime_taxable_income,
+        "old_regime_tax_before_rebate": computation.old_regime_tax_before_rebate,
+        "old_regime_rebate": computation.old_regime_rebate,
+        "old_regime_tax_after_rebate": computation.old_regime_tax_after_rebate,
+        "old_regime_surcharge": computation.old_regime_surcharge,
+        "old_regime_cess": computation.old_regime_cess,
+        "old_regime_total_tax": computation.old_regime_total_tax,
+        
+        # New regime
+        "new_regime_deductions": computation.new_regime_deductions or {},
+        "new_regime_total_deductions": computation.new_regime_total_deductions,
+        "new_regime_taxable_income": computation.new_regime_taxable_income,
+        "new_regime_tax_before_rebate": computation.new_regime_tax_before_rebate,
+        "new_regime_rebate": computation.new_regime_rebate,
+        "new_regime_tax_after_rebate": computation.new_regime_tax_after_rebate,
+        "new_regime_surcharge": computation.new_regime_surcharge,
+        "new_regime_cess": computation.new_regime_cess,
+        "new_regime_total_tax": computation.new_regime_total_tax,
+        
+        # Recommendation
+        "recommended_regime": computation.recommended_regime,
+        "recommendation_reason": computation.recommendation_reason,
+        "recommended_itr_form": computation.recommended_itr_form,
+        "tax_savings": computation.tax_savings,
+        
+        # TDS
+        "total_tds": computation.total_tds,
+        "tax_payable": computation.tax_payable,
+        "refund_amount": computation.refund_amount,
+    }
+    
+    try:
+        # Get tax rules for this financial year
+        try:
+            rules_service = RulesService(db, financial_year)
+            tax_rules = rules_service.get_all_deduction_limits()
+            # Add additional info from rules
+            tax_rules['rebate_87a_new'] = rules_service.get_rebate_87a('new_regime')
+            tax_rules['rebate_87a_old'] = rules_service.get_rebate_87a('old_regime')
+            tax_rules['cess_percent'] = rules_service.get_cess_percent()
+            tax_rules['80gg_info'] = rules_service.get_80gg_info()
+        except TaxRulesNotFoundError:
+            tax_rules = {}  # Will use defaults
+        
+        # Generate PDF
+        pdf_buffer = generate_helper_report(
+            user_data=user_data,
+            computation=computation_dict,
+            documents_data=documents_data,
+            financial_year=financial_year,
+            tax_rules=tax_rules
+        )
+        
+        # Log activity
+        activity = ActivityHistory(
+            user_id=current_user.id,
+            financial_year=financial_year,
+            activity_type="ITR1_REPORT_DOWNLOAD",
+            description=f"Downloaded ITR-1 helper report for FY {financial_year}",
+            activity_metadata={
+                "computation_id": computation.id,
+                "recommended_regime": computation.recommended_regime
+            }
+        )
+        db.add(activity)
+        db.commit()
+        
+        # Return PDF as streaming response
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=ITR1_Helper_{financial_year.replace('-', '_')}.pdf"
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ Error generating ITR-1 PDF: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error generating ITR-1 report: {str(e)}"
+        )
 

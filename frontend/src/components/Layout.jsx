@@ -2,7 +2,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { 
   Brain, LayoutDashboard, FileText, Calculator, 
-  TrendingUp, MessageCircle, Award, LogOut, Menu, X, Calendar 
+  TrendingUp, MessageCircle, Award, LogOut, Menu, X, Calendar, Shield 
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -32,6 +32,8 @@ function Layout({ children }) {
     { name: 'Investments', href: '/investments', icon: TrendingUp },
     { name: 'Q&A', href: '/qna', icon: MessageCircle },
     { name: 'Benefits', href: '/benefits', icon: Award },
+    // Admin link - only shown for admin users
+    ...(user?.is_admin ? [{ name: 'Admin', href: '/admin/tax-rules', icon: Shield, admin: true }] : []),
   ]
 
   return (

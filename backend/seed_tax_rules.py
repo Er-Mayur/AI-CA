@@ -695,34 +695,53 @@ TAX_RULES_2024_25 = {
 }
 
 def seed_tax_rules():
-    """Seed tax rules into database"""
+    """Seed tax rules into database for all supported financial years"""
     # Create all tables first
     Base.metadata.create_all(bind=engine)
     
     db = SessionLocal()
     
     try:
-        # Check if tax rules already exist
-        existing_rule = db.query(TaxRule).filter(
+        # Seed FY 2023-24 rules
+        existing_2023 = db.query(TaxRule).filter(
+            TaxRule.financial_year == "2023-24"
+        ).first()
+        
+        if existing_2023:
+            print("Tax rules for FY 2023-24 already exist. Updating...")
+            existing_2023.rules_json = TAX_RULES_2023_24
+            existing_2023.is_active = True
+        else:
+            print("Creating tax rules for FY 2023-24...")
+            tax_rule_2023 = TaxRule(
+                financial_year="2023-24",
+                assessment_year="2024-25",
+                rules_json=TAX_RULES_2023_24,
+                is_active=True
+            )
+            db.add(tax_rule_2023)
+        
+        # Seed FY 2024-25 rules
+        existing_2024 = db.query(TaxRule).filter(
             TaxRule.financial_year == "2024-25"
         ).first()
         
-        if existing_rule:
+        if existing_2024:
             print("Tax rules for FY 2024-25 already exist. Updating...")
-            existing_rule.rules_json = TAX_RULES_2024_25
-            existing_rule.is_active = True
+            existing_2024.rules_json = TAX_RULES_2024_25
+            existing_2024.is_active = True
         else:
             print("Creating tax rules for FY 2024-25...")
-            tax_rule = TaxRule(
+            tax_rule_2024 = TaxRule(
                 financial_year="2024-25",
                 assessment_year="2025-26",
                 rules_json=TAX_RULES_2024_25,
                 is_active=True
             )
-            db.add(tax_rule)
+            db.add(tax_rule_2024)
         
         db.commit()
-        print("[SUCCESS] Tax rules seeded successfully!")
+        print("[SUCCESS] Tax rules for FY 2023-24 and FY 2024-25 seeded successfully!")
         
     except Exception as e:
         print(f"[ERROR] Error seeding tax rules: {e}")

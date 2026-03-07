@@ -7,7 +7,6 @@ import {
   Award, TrendingUp, Calculator, FileText, 
   Shield, Zap, Download, CheckCircle 
 } from 'lucide-react'
-import jsPDF from 'jspdf'
 
 function Benefits() {
   const { currentFY } = useAuth()
@@ -15,6 +14,7 @@ function Benefits() {
   const [computation, setComputation] = useState(null)
   const [suggestions, setSuggestions] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     if (currentFY) {
@@ -40,74 +40,31 @@ function Benefits() {
     }
   }
 
-  const handleDownloadSummary = () => {
-    const doc = new jsPDF()
+  const handleDownloadSummary = async () => {
+    setDownloading(true)
     
-    // Title
-    doc.setFontSize(22)
-    doc.text('AI-CA Benefits Summary', 20, 20)
-    
-    doc.setFontSize(12)
-    doc.text(`Financial Year: ${currentFY}`, 20, 35)
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 20, 42)
-    
-    // Benefits
-    doc.setFontSize(16)
-    doc.text('Key Benefits', 20, 55)
-    
-    doc.setFontSize(11)
-    let y = 65
-    
-    if (computation) {
-      doc.text(`Tax Regime Recommendation: ${computation.recommended_regime}`, 25, y)
-      y += 7
-      doc.text(`Tax Savings: ₹${computation.tax_savings.toLocaleString('en-IN')}`, 25, y)
-      y += 7
-      doc.text(`Recommended ITR Form: ${computation.recommended_itr_form}`, 25, y)
-      y += 10
-    }
-    
-    if (suggestions) {
-      doc.setFontSize(16)
-      doc.text('Investment Suggestions', 20, y)
-      y += 10
+    try {
+      const response = await api.get(`/dashboard/download-summary/${currentFY}`, {
+        responseType: 'blob'
+      })
       
-      doc.setFontSize(11)
-      doc.text(`Potential Additional Savings: ₹${suggestions.potential_savings.toLocaleString('en-IN')}`, 25, y)
-      y += 10
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `AI-CA_Benefits_Summary_${currentFY.replace('-', '_')}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Benefits Summary downloaded')
+    } catch (error) {
+      console.error('Download error:', error)
+      toast.error(error.response?.data?.detail || 'Failed to download summary')
+    } finally {
+      setDownloading(false)
     }
-    
-    doc.setFontSize(16)
-    doc.text('Documents Processed', 20, y)
-    y += 10
-    
-    doc.setFontSize(11)
-    doc.text(`Documents Verified: ${stats?.documents_verified || 0}`, 25, y)
-    y += 7
-    
-    // Features Used
-    y += 10
-    doc.setFontSize(16)
-    doc.text('AI-CA Features Used', 20, y)
-    y += 10
-    
-    doc.setFontSize(11)
-    const features = [
-      '✓ Automated document verification',
-      '✓ AI-powered data extraction',
-      '✓ Dual regime tax calculation',
-      '✓ Personalized regime recommendation',
-      '✓ Investment suggestions',
-      '✓ ITR form recommendation'
-    ]
-    
-    features.forEach(feature => {
-      doc.text(feature, 25, y)
-      y += 7
-    })
-    
-    doc.save(`aica-benefits-summary-${currentFY}.pdf`)
-    toast.success('Summary downloaded successfully')
   }
 
   if (loading) {
@@ -133,10 +90,15 @@ function Benefits() {
           </div>
           <button
             onClick={handleDownloadSummary}
+            disabled={downloading}
             className="btn-primary flex items-center space-x-2"
           >
-            <Download className="w-5 h-5" />
-            <span>Download Summary</span>
+            {downloading ? (
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+            ) : (
+              <Download className="w-5 h-5" />
+            )}
+            <span>{downloading ? 'Generating...' : 'Download Summary'}</span>
           </button>
         </div>
 

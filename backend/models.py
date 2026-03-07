@@ -29,6 +29,7 @@ class User(Base):
     gender = Column(Enum(Gender), nullable=False)
     date_of_birth = Column(DateTime, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    is_admin = Column(Boolean, default=False)  # Admin role for managing tax rules
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

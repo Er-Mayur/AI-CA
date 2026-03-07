@@ -29,13 +29,14 @@ async def get_investment_suggestions(
             detail="Tax computation not found. Please calculate tax first."
         )
     
-    # Generate suggestions using AI
+    # Generate suggestions using AI with rules from database
     try:
         result = await generate_investment_suggestions(
             gross_income=computation.gross_total_income,
             current_deductions=computation.old_regime_deductions or {},
             taxable_income=computation.old_regime_taxable_income,
-            financial_year=financial_year
+            financial_year=financial_year,
+            db=db  # Pass db session for RulesService
         )
         
         # Check if suggestion already exists

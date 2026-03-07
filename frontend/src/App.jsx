@@ -12,6 +12,7 @@ import TaxCalculation from './pages/TaxCalculation'
 import Investments from './pages/Investments'
 import QnA from './pages/QnA'
 import Benefits from './pages/Benefits'
+import AdminTaxRules from './pages/AdminTaxRules'
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -26,6 +27,24 @@ function ProtectedRoute({ children }) {
   }
   
   return user ? children : <Navigate to="/login" />
+}
+
+// Admin Route Component
+function AdminRoute({ children }) {
+  const { user, loading } = useAuth()
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      </div>
+    )
+  }
+  
+  if (!user) return <Navigate to="/login" />
+  if (!user.is_admin) return <Navigate to="/dashboard" />
+  
+  return children
 }
 
 function App() {
@@ -72,6 +91,12 @@ function App() {
             <ProtectedRoute>
               <Benefits />
             </ProtectedRoute>
+          } />
+          
+          <Route path="/admin/tax-rules" element={
+            <AdminRoute>
+              <AdminTaxRules />
+            </AdminRoute>
           } />
         </Routes>
       </Router>

@@ -39,6 +39,7 @@ class UserResponse(BaseModel):
     email: str
     gender: Gender
     date_of_birth: date
+    is_admin: bool = False
     created_at: datetime
     
     class Config:
