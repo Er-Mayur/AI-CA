@@ -48,12 +48,20 @@ async def get_investment_suggestions(
             suggestion = existing_suggestion
             suggestion.suggestions = result["suggestions"]
             suggestion.potential_savings = result["total_potential_savings"]
+            suggestion.deduction_summary = result.get("deduction_summary")
+            suggestion.tax_rate = result.get("tax_rate")
+            suggestion.gross_income = result.get("gross_income")
+            suggestion.taxable_income = result.get("taxable_income")
         else:
             suggestion = InvestmentSuggestion(
                 user_id=current_user.id,
                 financial_year=financial_year,
                 suggestions=result["suggestions"],
-                potential_savings=result["total_potential_savings"]
+                potential_savings=result["total_potential_savings"],
+                deduction_summary=result.get("deduction_summary"),
+                tax_rate=result.get("tax_rate"),
+                gross_income=result.get("gross_income"),
+                taxable_income=result.get("taxable_income")
             )
             db.add(suggestion)
         

@@ -525,16 +525,17 @@ def extract_text_from_pdf_advanced(file_path: str) -> str:
 async def extract_document_data(file_path: str, doc_type: DocType, financial_year: str,
                                 text_content: str = None) -> Dict[str, Any]:
     """
-    🎯 EXTRACT STRUCTURED DATA FROM VERIFIED DOCUMENT
-
+    🎯 COMPREHENSIVE DATA EXTRACTION FROM VERIFIED DOCUMENT
+    
     Uses hybrid approach:
     1. Extract text (advanced multi-method)
-    2. Pattern extraction for common fields
+    2. Smart Pattern extraction for all identifiable fields
     3. AI extraction for complex/variable fields
+    4. Merge results with pattern data as base, AI as enhancement
     """
     try:
         print(f"\n{'=' * 60}")
-        print(f"📊 DATA EXTRACTION STARTED")
+        print(f"📊 COMPREHENSIVE DATA EXTRACTION STARTED")
         print(f"{'=' * 60}\n")
 
         if text_content and len(text_content) > 10:
@@ -543,14 +544,71 @@ async def extract_document_data(file_path: str, doc_type: DocType, financial_yea
         else:
             text = extract_text_from_pdf_advanced(file_path)
 
-        print(f"🤖 Using AI (local Mistral) for structured extraction...")
-        extracted_data = await extract_data_with_ai(text, doc_type, financial_year)
-
-        print(f"\n✅ Data extraction completed")
+        # STEP 1: Run comprehensive smart pattern extraction
+        print(f"🔍 Running SMART pattern extraction for all tax-relevant fields...")
+        pattern_data = extract_with_smart_extractor(text, "", "", financial_year)
+        
+        print(f"   Pattern extraction found {len([k for k, v in pattern_data.items() if v])} non-empty fields")
+        
+        # STEP 2: Run AI extraction for complex/semantic fields
+        print(f"🤖 Running AI extraction for structured data...")
+        ai_data = await extract_data_with_ai(text, doc_type, financial_year)
+        
+        print(f"   AI extraction found {len([k for k, v in ai_data.items() if v])} non-empty fields")
+        
+        # STEP 3: Merge data - pattern extraction as base, AI as enhancement
+        # Pattern data is deterministic and reliable
+        # AI data fills in what patterns can't handle
+        merged_data = {}
+        
+        # Start with pattern data (reliable)
+        for key, value in pattern_data.items():
+            if value and value != 0:
+                merged_data[key] = value
+        
+        # Add AI data for fields not in pattern data or where AI found more
+        ai_priority_fields = [
+            'name', 'employer_name', 
+            'deductions', 'exemptions',
+            'allowances', 'perquisites',
+            'section_192_tds', 'section_194a_tds',
+            'section_194i_tds', 'section_194j_tds',
+            'dividend_income', 'interest_income',
+            'rental_income', 'capital_gains',
+            'savings_interest', 'fd_interest',
+            'other_income', 'business_income'
+        ]
+        
+        for key, value in ai_data.items():
+            if value and value != 0:
+                # AI priority fields override pattern data
+                if key in ai_priority_fields:
+                    # Merge nested dicts
+                    if isinstance(value, dict) and isinstance(merged_data.get(key), dict):
+                        merged_data[key] = {**merged_data.get(key, {}), **value}
+                    elif value:
+                        merged_data[key] = value
+                # For other fields, only add if not already present
+                elif key not in merged_data or not merged_data[key]:
+                    merged_data[key] = value
+        
+        # Ensure financial year is set
+        if not merged_data.get('financial_year') and financial_year:
+            merged_data['financial_year'] = financial_year
+        
+        # Add extraction metadata
+        merged_data['_extraction_method'] = 'hybrid_pattern_ai'
+        merged_data['_pattern_fields_count'] = len([k for k, v in pattern_data.items() if v])
+        merged_data['_ai_fields_count'] = len([k for k, v in ai_data.items() if v])
+        
+        print(f"\n✅ Comprehensive data extraction completed")
+        print(f"   Total merged fields: {len([k for k, v in merged_data.items() if v and not k.startswith('_')])}")
         print(f"{'=' * 60}\n")
 
-        return extracted_data
+        return merged_data
 
     except Exception as e:
         print(f"❌ Error extracting data: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise Exception(f"Error extracting data: {str(e)}")

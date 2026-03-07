@@ -151,16 +151,77 @@ def get_tax_computation(
     return computation
 
 def aggregate_document_data(documents):
-    """Aggregate data from multiple documents"""
+    """
+    Comprehensive aggregation of data from multiple tax documents
+    Combines Form 16, Form 26AS, and AIS data intelligently
+    """
     
     aggregated = {
+        # Income Details
         "gross_total_income": 0,
         "salary_income": 0,
+        "gross_salary": 0,
+        "net_salary": 0,
         "house_property_income": 0,
         "capital_gains": 0,
+        "capital_gains_short_term": 0,
+        "capital_gains_long_term": 0,
         "other_income": 0,
+        "interest_income": 0,
+        "dividend_income": 0,
+        "business_income": 0,
+        
+        # TDS Details
         "total_tds": 0,
-        "old_regime_deductions": {}
+        "tds_on_salary": 0,
+        "advance_tax_paid": 0,
+        "self_assessment_tax": 0,
+        
+        # Exemptions (Section 10, 16)
+        "exemptions": {
+            "hra_exemption": 0,
+            "lta_exemption": 0,
+            "standard_deduction": 0,
+            "professional_tax": 0,
+            "entertainment_allowance": 0,
+            "total_exemptions": 0
+        },
+        
+        # Chapter VI-A Deductions (Old Regime)
+        "old_regime_deductions": {
+            "80C": 0,
+            "80CCC": 0,
+            "80CCD_1": 0,
+            "80CCD_1B": 0,
+            "80CCD_2": 0,
+            "80D": 0,
+            "80DD": 0,
+            "80DDB": 0,
+            "80E": 0,
+            "80EE": 0,
+            "80EEA": 0,
+            "80G": 0,
+            "80GG": 0,
+            "80TTA": 0,
+            "80TTB": 0,
+            "80U": 0,
+            "24b_home_loan_interest": 0,
+            "Standard Deduction": 0,
+            "Professional Tax": 0,
+        },
+        
+        # Tax computation details (from Form 16)
+        "tax_on_total_income": 0,
+        "rebate_87a": 0,
+        "surcharge": 0,
+        "cess": 0,
+        "total_tax_liability": 0,
+        "relief_89": 0,
+        
+        # Flags
+        "has_capital_gains": False,
+        "has_business_income": False,
+        "has_foreign_assets": False,
     }
     
     for doc in documents:
@@ -168,63 +229,214 @@ def aggregate_document_data(documents):
             continue
         
         data = doc.extracted_data
+        doc_type_value = doc.doc_type.value if doc.doc_type else ""
         
-        # Aggregate income (use maximum or sum based on document type)
-        # Form 16 typically has the most complete salary info
-        if doc.doc_type.value == "Form 16":
+        print(f"📊 Aggregating data from {doc_type_value}...")
+        
+        # === FORM 16 DATA ===
+        if doc_type_value == "Form 16":
+            # Salary Income - Use maximum (Form 16 is authoritative for salary)
             aggregated["salary_income"] = max(
                 aggregated["salary_income"],
-                data.get("gross_salary", 0)
+                _safe_float(data.get("gross_salary", 0)),
+                _safe_float(data.get("salary_income", 0))
             )
+            aggregated["gross_salary"] = max(
+                aggregated["gross_salary"],
+                _safe_float(data.get("gross_salary", 0))
+            )
+            aggregated["net_salary"] = max(
+                aggregated["net_salary"],
+                _safe_float(data.get("net_salary", 0))
+            )
+            
+            # Gross Total Income
             aggregated["gross_total_income"] = max(
                 aggregated["gross_total_income"],
-                data.get("total_income", 0)
+                _safe_float(data.get("gross_total_income", 0)),
+                _safe_float(data.get("total_income", 0))
             )
+            
+            # TDS
             aggregated["total_tds"] = max(
                 aggregated["total_tds"],
-                data.get("total_tds", 0)
+                _safe_float(data.get("total_tds", 0)),
+                _safe_float(data.get("total_tax_deducted", 0))
+            )
+            aggregated["tds_on_salary"] = max(
+                aggregated["tds_on_salary"],
+                _safe_float(data.get("tds_on_salary", 0))
             )
             
-            # Deductions from Form 16
-            if "deductions" in data:
-                for key, value in data["deductions"].items():
-                    aggregated["old_regime_deductions"][key] = aggregated["old_regime_deductions"].get(key, 0) + value
+            # House Property Income/Loss
+            hp_income = _safe_float(data.get("income_from_house_property", 0))
+            if hp_income != 0:
+                aggregated["house_property_income"] = hp_income
             
-            # Add Standard Deduction and Professional Tax
-            if data.get("standard_deduction"):
-                aggregated["old_regime_deductions"]["Standard Deduction"] = (
-                    aggregated["old_regime_deductions"].get("Standard Deduction", 0) + 
-                    data.get("standard_deduction", 0)
+            # Other Income
+            aggregated["other_income"] = max(
+                aggregated["other_income"],
+                _safe_float(data.get("income_from_other_sources", 0)),
+                _safe_float(data.get("other_income", 0))
+            )
+            
+            # === EXEMPTIONS (Section 10, 16) ===
+            exemptions = data.get("exemptions", {})
+            if isinstance(exemptions, dict):
+                for key in ["hra_exemption", "lta_exemption", "standard_deduction", 
+                           "professional_tax", "entertainment_allowance", "total_exemptions"]:
+                    aggregated["exemptions"][key] = max(
+                        aggregated["exemptions"].get(key, 0),
+                        _safe_float(exemptions.get(key, 0))
+                    )
+            
+            # Direct exemption fields (if not nested)
+            if "standard_deduction" in data:
+                aggregated["exemptions"]["standard_deduction"] = max(
+                    aggregated["exemptions"]["standard_deduction"],
+                    _safe_float(data.get("standard_deduction", 0))
+                )
+            if "professional_tax" in data:
+                aggregated["exemptions"]["professional_tax"] = max(
+                    aggregated["exemptions"]["professional_tax"],
+                    _safe_float(data.get("professional_tax", 0))
                 )
             
-            if data.get("professional_tax"):
-                aggregated["old_regime_deductions"]["Professional Tax"] = (
-                    aggregated["old_regime_deductions"].get("Professional Tax", 0) + 
-                    data.get("professional_tax", 0)
-                )
+            # === CHAPTER VI-A DEDUCTIONS ===
+            deductions = data.get("deductions", {})
+            if isinstance(deductions, dict):
+                for key in ["80C", "80CCC", "80CCD_1", "80CCD_1B", "80CCD_2", 
+                           "80D", "80DD", "80DDB", "80E", "80EE", "80EEA",
+                           "80G", "80GG", "80TTA", "80TTB", "80U", 
+                           "24b_home_loan_interest", "total_deductions"]:
+                    value = _safe_float(deductions.get(key, 0))
+                    if value > 0:
+                        aggregated["old_regime_deductions"][key] = max(
+                            aggregated["old_regime_deductions"].get(key, 0),
+                            value
+                        )
+                
+                # Handle lowercase variations (from older extraction)
+                key_mapping = {
+                    "80c": "80C", "80ccc": "80CCC", "80ccd": "80CCD_1",
+                    "80d": "80D", "80e": "80E", "80g": "80G"
+                }
+                for old_key, new_key in key_mapping.items():
+                    value = _safe_float(deductions.get(old_key, 0))
+                    if value > 0:
+                        aggregated["old_regime_deductions"][new_key] = max(
+                            aggregated["old_regime_deductions"].get(new_key, 0),
+                            value
+                        )
+            
+            # Add Standard Deduction and Professional Tax to deductions for old regime calc
+            aggregated["old_regime_deductions"]["Standard Deduction"] = max(
+                aggregated["old_regime_deductions"].get("Standard Deduction", 0),
+                aggregated["exemptions"].get("standard_deduction", 0)
+            )
+            aggregated["old_regime_deductions"]["Professional Tax"] = max(
+                aggregated["old_regime_deductions"].get("Professional Tax", 0),
+                aggregated["exemptions"].get("professional_tax", 0)
+            )
+            
+            # Tax computation details
+            aggregated["tax_on_total_income"] = max(
+                aggregated["tax_on_total_income"],
+                _safe_float(data.get("tax_on_total_income", 0))
+            )
+            aggregated["rebate_87a"] = max(
+                aggregated["rebate_87a"],
+                _safe_float(data.get("rebate_87a", 0))
+            )
+            aggregated["surcharge"] = max(
+                aggregated["surcharge"],
+                _safe_float(data.get("surcharge", 0))
+            )
+            aggregated["cess"] = max(
+                aggregated["cess"],
+                _safe_float(data.get("cess", 0))
+            )
+            aggregated["relief_89"] = max(
+                aggregated["relief_89"],
+                _safe_float(data.get("relief_89", 0))
+            )
         
-        # Form 26AS has TDS details
-        elif doc.doc_type.value == "Form 26AS":
+        # === FORM 26AS DATA ===
+        elif doc_type_value == "Form 26AS":
+            # TDS from 26AS is authoritative
             aggregated["total_tds"] = max(
                 aggregated["total_tds"],
-                data.get("total_tds", 0)
+                _safe_float(data.get("total_tds", 0))
             )
+            aggregated["advance_tax_paid"] = max(
+                aggregated["advance_tax_paid"],
+                _safe_float(data.get("advance_tax_paid", 0))
+            )
+            aggregated["self_assessment_tax"] = max(
+                aggregated["self_assessment_tax"],
+                _safe_float(data.get("self_assessment_tax", 0))
+            )
+            
+            # TDS details by section
+            tds_details = data.get("tds_details", {})
+            if isinstance(tds_details, dict):
+                salary_tds = _safe_float(tds_details.get("salary_192", 0))
+                if salary_tds > 0:
+                    aggregated["tds_on_salary"] = max(
+                        aggregated["tds_on_salary"], salary_tds
+                    )
         
-        # AIS has comprehensive income details
-        elif doc.doc_type.value == "AIS":
+        # === AIS DATA ===
+        elif doc_type_value == "AIS":
+            # Income details
             aggregated["salary_income"] = max(
                 aggregated["salary_income"],
-                data.get("salary", 0),
-                data.get("salary_income", 0)
+                _safe_float(data.get("salary_income", 0)),
+                _safe_float(data.get("salary", 0))
             )
-            aggregated["other_income"] += data.get("interest_income", 0)
-            aggregated["other_income"] += data.get("dividend_income", 0)
-            aggregated["other_income"] += data.get("other_income", 0)
-            aggregated["capital_gains"] += data.get("capital_gains", 0)
-            aggregated["business_income"] = max(
-                aggregated.get("business_income", 0),
-                data.get("business_income", 0)
+            
+            # Interest Income
+            interest = _safe_float(data.get("interest_income", 0))
+            if interest > 0:
+                aggregated["interest_income"] = max(aggregated["interest_income"], interest)
+                aggregated["other_income"] += interest  # Add to other income
+            
+            # Dividend Income
+            dividend = _safe_float(data.get("dividend_income", 0))
+            if dividend > 0:
+                aggregated["dividend_income"] = max(aggregated["dividend_income"], dividend)
+                aggregated["other_income"] += dividend
+            
+            # Capital Gains
+            stcg = _safe_float(data.get("capital_gains_short_term", 0))
+            ltcg = _safe_float(data.get("capital_gains_long_term", 0))
+            if stcg > 0 or ltcg > 0:
+                aggregated["capital_gains_short_term"] = max(aggregated["capital_gains_short_term"], stcg)
+                aggregated["capital_gains_long_term"] = max(aggregated["capital_gains_long_term"], ltcg)
+                aggregated["capital_gains"] = aggregated["capital_gains_short_term"] + aggregated["capital_gains_long_term"]
+                aggregated["has_capital_gains"] = True
+            
+            # Business Income
+            business = _safe_float(data.get("business_income", 0))
+            if business > 0:
+                aggregated["business_income"] = max(aggregated["business_income"], business)
+                aggregated["has_business_income"] = True
+            
+            # Other Income
+            other = _safe_float(data.get("other_income", 0))
+            aggregated["other_income"] += other
+            
+            # TDS
+            aggregated["total_tds"] = max(
+                aggregated["total_tds"],
+                _safe_float(data.get("total_tds", 0))
             )
+    
+    # === CALCULATE DERIVED VALUES ===
+    
+    # If salary_income is 0 but gross_salary exists, use gross_salary
+    if aggregated["salary_income"] == 0 and aggregated["gross_salary"] > 0:
+        aggregated["salary_income"] = aggregated["gross_salary"]
     
     # Calculate gross total income if not set
     if aggregated["gross_total_income"] == 0:
@@ -232,8 +444,38 @@ def aggregate_document_data(documents):
             aggregated["salary_income"] +
             aggregated["house_property_income"] +
             aggregated["capital_gains"] +
-            aggregated["other_income"]
+            aggregated["other_income"] +
+            aggregated["business_income"]
         )
     
+    # Ensure standard deduction has reasonable defaults for salaried
+    if aggregated["salary_income"] > 0 and aggregated["exemptions"]["standard_deduction"] == 0:
+        # Default standard deduction (FY 2024-25: Rs. 75,000, earlier: Rs. 50,000)
+        aggregated["exemptions"]["standard_deduction"] = 50000
+        aggregated["old_regime_deductions"]["Standard Deduction"] = 50000
+        print("   ℹ️ Applied default Standard Deduction: ₹50,000")
+    
+    print(f"✅ Aggregation complete:")
+    print(f"   Gross Total Income: ₹{aggregated['gross_total_income']:,.0f}")
+    print(f"   Salary Income: ₹{aggregated['salary_income']:,.0f}")
+    print(f"   Total TDS: ₹{aggregated['total_tds']:,.0f}")
+    print(f"   Deductions found: {sum(v for k, v in aggregated['old_regime_deductions'].items() if isinstance(v, (int, float)) and v > 0)}")
+    
     return aggregated
+
+
+def _safe_float(value) -> float:
+    """Safely convert value to float"""
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            # Remove commas and currency symbols
+            cleaned = value.replace(',', '').replace('₹', '').replace('Rs.', '').replace('Rs', '').strip()
+            return float(cleaned)
+        except ValueError:
+            return 0.0
+    return 0.0
 

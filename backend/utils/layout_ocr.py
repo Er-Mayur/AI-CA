@@ -101,14 +101,14 @@ def extract_text_with_ocr(file_path: str) -> Dict[str, Any]:
             print(f"=== OCR: Using Poppler at: {POPPLER_PATH} ===")
             images = convert_from_path(
                 file_path,
-                dpi=300,
+                dpi=150,  # Reduced for speed (was 300)
                 fmt="png",
                 poppler_path=POPPLER_PATH,
             )
         else:
             images = convert_from_path(
                 file_path,
-                dpi=300,
+                dpi=150,  # Reduced for speed (was 300)
                 fmt="png",
             )
 
@@ -195,24 +195,33 @@ def extract_text_with_ocr(file_path: str) -> Dict[str, Any]:
 def extract_text_hybrid(file_path: str) -> str:
     """
     Hybrid extraction: Try pdfplumber first, fall back to OCR
+    For scanned PDFs, go straight to OCR.
     """
-    import pdfplumber
-
+    import fitz  # PyMuPDF - faster for detecting scanned PDFs
+    
+    # First, quick check with PyMuPDF to detect if scanned
     try:
-        with pdfplumber.open(file_path) as pdf:
-            text = ""
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-
-            if text and len(text.strip()) > 100:
-                print(f"=== Using pdfplumber extraction ({len(text)} chars) ===")
-                return text
-
+        doc = fitz.open(file_path)
+        quick_text = ""
+        for page in doc:
+            quick_text += page.get_text("text")
+        doc.close()
+        
+        # If we got very little text, it's likely a scanned PDF - go straight to OCR
+        if len(quick_text.strip()) < 500:
+            print(f"=== PDF appears to be scanned ({len(quick_text)} chars), using OCR directly ===")
+            result = extract_text_with_ocr(file_path)
+            if result["success"]:
+                return result["raw_text"]
+            raise Exception(f"OCR extraction failed: {result.get('error', 'Unknown error')}")
+        else:
+            # Good text extracted with PyMuPDF
+            print(f"=== Using PyMuPDF extraction ({len(quick_text)} chars) ===")
+            return quick_text
+            
     except Exception as e:
-        print(f"=== pdfplumber failed: {str(e)}, falling back to OCR ===")
-
+        print(f"=== PyMuPDF check failed: {str(e)}, trying OCR ===")
+    
     print("=== Using OCR extraction (slower but works for scanned PDFs) ===")
     result = extract_text_with_ocr(file_path)
 

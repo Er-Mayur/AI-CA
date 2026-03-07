@@ -148,43 +148,67 @@ async def upload_document(
         db.add(activity)
         db.commit()
         
-        # OPTIMIZATION: Only run full AI extraction if critical data is missing from verification
-        # Verification phase already extracts PAN, FY, Name via regex
-        # If we have those, we might not need full AI extraction right away
+        # ALWAYS run comprehensive extraction to ensure all tax-relevant data is captured
+        # The initial verification extraction gets basic fields, but we need:
+        # - All salary components (basic, HRA, DA, etc.)
+        # - All deductions (80C, 80D, 80E, etc.)
+        # - All exemptions (HRA, LTA, standard deduction)
+        # - TDS breakdowns by section
+        # - And more for accurate tax calculations
         
-        has_critical_data = (
+        # Check if we have comprehensive data (not just basic fields)
+        has_comprehensive_data = (
             initial_extracted_data.get('pan') and 
             initial_extracted_data.get('financial_year') and
-            initial_extracted_data.get('gross_salary') # Smart extractor tries to find this too
+            initial_extracted_data.get('gross_salary') and
+            # Comprehensive check - do we have deduction details?
+            (
+                initial_extracted_data.get('deduction_80c', 0) > 0 or
+                initial_extracted_data.get('standard_deduction', 0) > 0 or
+                initial_extracted_data.get('total_deductions', 0) > 0
+            )
         )
         
-        # Only run deep extraction if we are missing data OR if it's a scanned PDF (where smart extraction is limited)
-        # Check if it was a scanned PDF by looking at confidence or extracted fields
         try:
             final_extracted_data = document.extracted_data or {}
             
-            # If verification returned high confidence data, just use it!
-            if has_critical_data:
-                 print(f"Skipping redundant AI extraction - verification already provided data")
+            # Run comprehensive extraction for tax calculations
+            if has_comprehensive_data:
+                print(f"✅ Verification already provided comprehensive data - using as base")
+                final_extracted_data = initial_extracted_data
             else:
-                 # Only perform AI extraction if current data is insufficient
-                 print(f"Performing deep data extraction for missing fields...")
-                 # Pass the already extracted text to avoid re-running OCR
-                 extracted_data = await extract_document_data(
-                     file_path, 
-                     doc_type_enum, 
-                     financial_year,
-                     text_content=extracted_text_content
-                 )
-                 
-                 # Merge with initial data (prefer AI data for specific fields, pattern data for IDs)
-                 # Update ONLY missing fields to avoid overwriting good data
-                 current_data = document.extracted_data or {}
-                 current_data.update(extracted_data)
-                 document.extracted_data = current_data
-                 db.commit()
-                 
-                 final_extracted_data = current_data
+                # Perform comprehensive hybrid extraction (pattern + AI)
+                print(f"🔄 Performing comprehensive data extraction for tax calculations...")
+                # Pass the already extracted text to avoid re-running OCR
+                extracted_data = await extract_document_data(
+                    file_path, 
+                    doc_type_enum, 
+                    financial_year,
+                    text_content=extracted_text_content
+                )
+                
+                # Merge with initial data - comprehensive extraction enhances verification data
+                # Keep verified PAN and FY from initial, add financial details from extraction
+                current_data = document.extracted_data or {}
+                
+                # Preserve verified identity fields
+                verified_pan = current_data.get('pan')
+                verified_fy = current_data.get('financial_year')
+                
+                # Merge extracted data
+                current_data.update(extracted_data)
+                
+                # Ensure verified fields are preserved
+                if verified_pan:
+                    current_data['pan'] = verified_pan
+                if verified_fy:
+                    current_data['financial_year'] = verified_fy
+                
+                document.extracted_data = current_data
+                db.commit()
+                
+                final_extracted_data = current_data
+                print(f"✅ Comprehensive extraction completed - {len([k for k,v in final_extracted_data.items() if v])} fields")
             
             # === RAG INTEGRATION START ===
             # Trigger Indexing immediately after data is finalized

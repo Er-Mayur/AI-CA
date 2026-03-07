@@ -140,6 +140,10 @@ class InvestmentSuggestion(Base):
     financial_year = Column(String(20), nullable=False)
     suggestions = Column(JSON, nullable=False)  # Array of suggestions
     potential_savings = Column(Float, default=0.0)
+    deduction_summary = Column(JSON, nullable=True)  # Current vs limit deductions
+    tax_rate = Column(Float, nullable=True)
+    gross_income = Column(Float, nullable=True)
+    taxable_income = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Conversation(Base):

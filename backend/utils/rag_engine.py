@@ -1,13 +1,44 @@
 import chromadb
 from chromadb.utils import embedding_functions
+from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 import uuid
 import os
+import httpx
 from typing import List, Dict, Any, Optional
 from utils.ollama_client import OLLAMA_BASE_URL, OLLAMA_MODEL
 
+
+class OllamaEmbeddingFunction(EmbeddingFunction):
+    """Custom embedding function for Ollama (compatible with chromadb 0.4.x)"""
+    
+    def __init__(self, url: str, model_name: str):
+        self.url = url
+        self.model_name = model_name
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = []
+        for text in input:
+            try:
+                response = httpx.post(
+                    self.url,
+                    json={"model": self.model_name, "prompt": text},
+                    timeout=60.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    embeddings.append(data.get("embedding", []))
+                else:
+                    # Fallback: return empty embedding
+                    print(f"Ollama embedding error: {response.status_code}")
+                    embeddings.append([0.0] * 768)
+            except Exception as e:
+                print(f"Ollama embedding exception: {e}")
+                embeddings.append([0.0] * 768)
+        return embeddings
+
+
 # 1. Setup ChromaDB with Ollama Embeddings
-# This ensures embeddings are generated using your local model (mistral/llama)
-ollama_ef = embedding_functions.OllamaEmbeddingFunction(
+ollama_ef = OllamaEmbeddingFunction(
     url=f"{OLLAMA_BASE_URL}/api/embeddings",
     model_name=OLLAMA_MODEL
 )

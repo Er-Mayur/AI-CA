@@ -167,6 +167,10 @@ class InvestmentSuggestionResponse(BaseModel):
     financial_year: str
     suggestions: List[Dict[str, Any]]
     potential_savings: float
+    deduction_summary: Optional[Dict[str, Any]] = None
+    tax_rate: Optional[float] = None
+    gross_income: Optional[float] = None
+    taxable_income: Optional[float] = None
     created_at: datetime
     
     class Config:
