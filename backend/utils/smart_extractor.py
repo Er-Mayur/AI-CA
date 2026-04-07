@@ -466,6 +466,69 @@ class SmartExtractor:
             value = self._extract_amount_multi_pattern(patterns)
             if value:
                 result[field] = value
+
+        # === OCR FALLBACKS FOR NOISY FORM 16 TEXT ===
+        # OCR output often inserts symbols/noise between labels and amounts.
+        # Use contextual window extraction so key values are not missed.
+        if result.get('gross_total_income', 0) == 0:
+            gross_total_income = self._extract_contextual_amount(
+                label_patterns=[
+                    r'GROSS\s+TOTAL\s+INCOME',
+                    r'TOTAL\s+INCOME\s*\(\s*6\s*\+\s*8\s*\)',
+                    r'NET\s+TAXABLE\s+INCOME',
+                ],
+                search_window=260,
+                min_value=50000,
+            )
+            if gross_total_income:
+                result['gross_total_income'] = gross_total_income
+
+        if result.get('gross_salary', 0) == 0:
+            gross_salary = self._extract_contextual_amount(
+                label_patterns=[
+                    r'GROSS\s+SALARY',
+                    r'SALARY\s+AS\s+PER',
+                    r'TOTAL\s+SALARY',
+                ],
+                search_window=260,
+                min_value=50000,
+            )
+            if gross_salary:
+                result['gross_salary'] = gross_salary
+
+        if result.get('total_income', 0) == 0:
+            total_income = self._extract_contextual_amount(
+                label_patterns=[
+                    r'TOTAL\s+INCOME',
+                    r'INCOME\s+CHARGEABLE\s+UNDER\s+THE\s+HEAD\s+SALARIES',
+                ],
+                search_window=260,
+                min_value=50000,
+            )
+            if total_income:
+                result['total_income'] = total_income
+
+        if result.get('total_tds', 0) == 0:
+            gross_reference = result.get('gross_total_income', 0) or result.get('gross_salary', 0)
+            tds_upper_limit = gross_reference * 0.35 if gross_reference else None
+            total_tds = self._extract_contextual_amount(
+                label_patterns=[
+                    r'LESS\s*[:\-]?\s*TAX\s+DEDUCTED\s+AT\s+SOURCE',
+                    r'NET\s+TAX\s+PAYABLE',
+                    r'TOTAL\s+AMOUNT\s+OF\s+TAX\s+DEDUCTED',
+                    r'TOTAL\s+TAX\s+LIABILITY',
+                ],
+                search_window=180,
+                min_value=5000,
+                max_value=tds_upper_limit,
+            )
+            if total_tds:
+                result['total_tds'] = total_tds
+                result['tds_on_salary'] = max(result.get('tds_on_salary', 0), total_tds)
+
+        # If salary-specific amount is still missing but GTI exists, use GTI as salary proxy.
+        if result.get('gross_salary', 0) == 0 and result.get('gross_total_income', 0) > 0:
+            result['gross_salary'] = result['gross_total_income']
         
         # Legacy field mapping
         result['total_tax_deducted'] = result.get('total_tds', 0)
@@ -754,11 +817,58 @@ class SmartExtractor:
         for pattern in patterns:
             match = re.search(pattern, self.text, re.IGNORECASE)
             if match:
-                amount_str = match.group(1).replace(',', '').replace(' ', '')
-                try:
-                    return float(amount_str)
-                except ValueError:
-                    continue
+                amount = self._parse_amount(match.group(1))
+                if amount is not None:
+                    return amount
+        return None
+
+    def _extract_contextual_amount(
+        self,
+        label_patterns: List[str],
+        search_window: int = 220,
+        min_value: float = 0.0,
+        max_value: Optional[float] = None,
+    ) -> Optional[float]:
+        """
+        Extract first reliable amount that appears near semantic labels.
+        Useful for OCR text where symbols/noise appear between label and value.
+        """
+        normalized_text = re.sub(r'\s+', ' ', self.text)
+        number_pattern = r'(?<![A-Z0-9])(?:\d{1,3}(?:,\d{2,3})+|\d{4,})(?:\.\d{2})?'
+
+        for label_pattern in label_patterns:
+            for label_match in re.finditer(label_pattern, normalized_text, re.IGNORECASE):
+                start = label_match.end()
+                window_text = normalized_text[start:start + search_window]
+
+                candidates = []
+                for raw in re.findall(number_pattern, window_text):
+                    amount = self._parse_amount(raw)
+                    if amount is None:
+                        continue
+                    if amount < min_value:
+                        continue
+                    if max_value is not None and amount > max_value:
+                        continue
+                    candidates.append(amount)
+
+                if candidates:
+                    return max(candidates)
+
+        return None
+
+    def _parse_amount(self, raw_value: Any) -> Optional[float]:
+        """Parse a numeric string/number into float."""
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+        if isinstance(raw_value, str):
+            cleaned = raw_value.replace(',', '').replace(' ', '').replace('₹', '').replace('RS.', '').replace('RS', '')
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
         return None
     
     def _extract_assessment_year(self) -> Optional[str]:

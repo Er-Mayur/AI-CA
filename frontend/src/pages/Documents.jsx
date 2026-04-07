@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import Layout from '../components/Layout'
-import api from '../services/api'
+import api, { uploadDocumentWithPolling } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
 import { Upload, FileText, CheckCircle, XCircle, Trash2, AlertCircle, X, ChevronDown, ChevronUp } from 'lucide-react'
@@ -17,6 +17,8 @@ function Documents() {
   const [errorDetails, setErrorDetails] = useState(null)
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState({ status: 'IDLE', message: '' });
+
 
   useEffect(() => {
     if (currentFY) {
@@ -45,89 +47,52 @@ function Documents() {
   }
 
   const handleUpload = async (e) => {
-    e.preventDefault()
-    
+    e.preventDefault();
+
     if (!uploadForm.file) {
-      toast.error('Please select a file')
-      return
+      toast.error('Please select a file');
+      return;
     }
 
-    setUploading(true)
+    setUploading(true);
+    setUploadProgress({ status: 'UPLOADING', message: 'Uploading file...' });
 
     try {
-      const formData = new FormData()
-      formData.append('file', uploadForm.file)
-      formData.append('financial_year', currentFY)
-      formData.append('doc_type', uploadForm.doc_type)
-
-      const response = await api.post('/documents/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
+      await uploadDocumentWithPolling(
+        uploadForm.file,
+        currentFY,
+        uploadForm.doc_type,
+        (progress) => {
+          setUploadProgress(progress);
+          // You can also show toasts for progress updates if desired
+          // toast.loading(progress.message);
         }
-      })
+      );
 
-      toast.success('Document uploaded and verified successfully!')
-      setUploadForm({ ...uploadForm, file: null })
-      document.getElementById('file-input').value = ''
-      setErrorDetails(null)
-      setShowErrorModal(false)
-      setShowTechnicalDetails(false)
-      fetchDocuments()
+      toast.success('Document processed successfully!');
+      setUploadForm({ ...uploadForm, file: null });
+      document.getElementById('file-input').value = '';
+      setErrorDetails(null);
+      setShowErrorModal(false);
+      setShowTechnicalDetails(false);
+      fetchDocuments();
     } catch (error) {
-      // Handle verification errors with detailed messages
-      const errorDetail = error.response?.data?.detail || 'Upload failed'
-      
-      // Parse error message to extract structured information
-      if (typeof errorDetail === 'string') {
-        const lines = errorDetail.split('\n').filter(line => line.trim())
-        
-        if (lines.length > 1) {
-          // Parse structured error message
-          const mainError = lines[0] || 'Verification failed'
-          const reasons = lines.filter(line => line.trim().startsWith('[REASON]'))
-          const actions = lines.filter(line => line.trim().startsWith('[ACTION]'))
-          const solutions = lines.filter(line => line.trim().startsWith('[SOLUTION]'))
-          
-          // Determine error type from main error message
-          let errorType = 'general'
-          if (mainError.includes('PAN')) {
-            errorType = 'pan'
-          } else if (mainError.includes('Financial Year') || mainError.includes('FY')) {
-            errorType = 'financial_year'
-          } else if (mainError.includes('Document Type') || mainError.includes('doc_type')) {
-            errorType = 'document_type'
-          }
-          
-          // Store error details for display
-          setErrorDetails({
-            mainError,
-            reasons,
-            actions,
-            solutions,
-            errorType,
-            fullMessage: errorDetail
-          })
-          setShowErrorModal(true)
-          
-          // Show main error in toast
-          toast.error(mainError, {
-            duration: 6000,
-          })
-        } else {
-          // Simple error message
-          toast.error(errorDetail)
-        }
-        
-        // Log full error for debugging
-        console.error('Verification Error:', errorDetail)
-      } else {
-        toast.error(errorDetail)
-      }
+      const errorMessage = error.message || 'Upload failed';
+      setErrorDetails({
+        mainError: 'Processing Failed',
+        reasons: [errorMessage],
+        actions: ['Please check the document and try again.'],
+        solutions: [],
+        fullMessage: errorMessage,
+      });
+      setShowErrorModal(true);
+      toast.error(errorMessage, { duration: 6000 });
     } finally {
-      setUploading(false)
+      setUploading(false);
+      setUploadProgress({ status: 'IDLE', message: '' });
     }
   }
-  
+
   const closeErrorModal = () => {
     setErrorDetails(null)
     setShowErrorModal(false)
@@ -312,6 +277,23 @@ function Documents() {
               </div>
             </div>
 
+            {uploading && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                  <div>
+                    <p className="font-semibold text-blue-800">
+                      {uploadProgress.status === 'UPLOADING' && 'Uploading...'}
+                      {uploadProgress.status === 'PROCESSING' && 'Processing Document...'}
+                      {uploadProgress.status === 'SUCCESS' && 'Processing Complete!'}
+                      {uploadProgress.status === 'FAILED' && 'Processing Failed.'}
+                    </p>
+                    <p className="text-sm text-blue-700">{uploadProgress.message}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={uploading}
@@ -350,26 +332,34 @@ function Documents() {
                         <p className="text-sm text-gray-600 mt-1">
                           Uploaded: {new Date(doc.uploaded_at).toLocaleDateString()}
                         </p>
-                        
+
                         <div className="mt-2 flex items-center space-x-2">
-                          {doc.verification_status === 'verified' ? (
+                          {doc.processing_status === 'SUCCESS' && (
                             <>
                               <CheckCircle className="w-5 h-5 text-green-600" />
-                              <span className="text-sm text-green-600 font-medium">Verified</span>
-                            </>
-                          ) : doc.verification_status === 'failed' ? (
-                            <>
-                              <XCircle className="w-5 h-5 text-red-600" />
-                              <span className="text-sm text-red-600 font-medium">Verification Failed</span>
-                            </>
-                          ) : (
-                            <>
-                              <AlertCircle className="w-5 h-5 text-yellow-600" />
-                              <span className="text-sm text-yellow-600 font-medium">Pending Verification</span>
+                              <span className="text-sm text-green-600 font-medium">Processed</span>
                             </>
                           )}
+                          {doc.processing_status === 'FAILED' && (
+                            <>
+                              <XCircle className="w-5 h-5 text-red-600" />
+                              <span className="text-sm text-red-600 font-medium">Failed</span>
+                            </>
+                          )}
+                          {doc.processing_status === 'PENDING' && (
+                            <>
+                              <AlertCircle className="w-5 h-5 text-yellow-600" />
+                              <span className="text-sm text-yellow-600 font-medium">Pending</span>
+                            </>
+                          )}
+                          {doc.processing_status === 'PROCESSING' && (
+                            <div className="flex items-center space-x-2">
+                               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                              <span className="text-sm text-blue-600 font-medium">Processing...</span>
+                            </div>
+                          )}
                         </div>
-                        
+
                         {doc.verification_message && (
                           <p className="text-sm text-gray-600 mt-2 bg-gray-50 p-2 rounded">
                             {doc.verification_message}
@@ -377,7 +367,7 @@ function Documents() {
                         )}
                       </div>
                     </div>
-                    
+
                     <button
                       onClick={() => handleDelete(doc.id)}
                       className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"

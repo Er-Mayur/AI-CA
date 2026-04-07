@@ -1,8 +1,9 @@
 import chromadb
-from chromadb.utils import embedding_functions
 from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
+from chromadb.config import Settings
 import uuid
 import os
+import shutil
 import httpx
 from typing import List, Dict, Any, Optional
 from utils.ollama_client import OLLAMA_BASE_URL, OLLAMA_MODEL
@@ -36,44 +37,72 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
                 embeddings.append([0.0] * 768)
         return embeddings
 
-
-# 1. Setup ChromaDB with Ollama Embeddings
-ollama_ef = OllamaEmbeddingFunction(
-    url=f"{OLLAMA_BASE_URL}/api/embeddings",
-    model_name=OLLAMA_MODEL
-)
-
-# Persistent storage in backend/chroma_db folder
-result_storage = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
-os.makedirs(result_storage, exist_ok=True)
-client = chromadb.PersistentClient(path=result_storage)
-
-# 2. Collections
-# Tax Rules: General knowledge (no user specific, maybe year specific for rules changing)
-try:
-    rules_collection = client.get_or_create_collection(
-        name="tax_rules", 
-        embedding_function=ollama_ef
-    )
-except Exception as e:
-    # Handle cases where get_or_create might fail due to dimensionality mismatch if model changed
-    print(f"Error creating rules collection: {e}")
-    rules_collection = client.get_collection(name="tax_rules", embedding_function=ollama_ef)
-
-# User Data: Highly sensitive, must be filtered by User ID and Year
-try:
-    user_data_collection = client.get_or_create_collection(
-        name="user_data", 
-        embedding_function=ollama_ef
-    )
-except Exception as e:
-    print(f"Error creating user_data collection: {e}")
-    user_data_collection = client.get_collection(name="user_data", embedding_function=ollama_ef)
-
 class RAGEngine:
-    def __init__(self):
-        self.rules = rules_collection
-        self.user_data = user_data_collection
+    def __init__(self, persist_directory: Optional[str] = None):
+        if persist_directory is None:
+            persist_directory = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
+
+        self.persist_directory = os.path.abspath(persist_directory)
+        os.makedirs(self.persist_directory, exist_ok=True)
+
+        self.ollama_ef = OllamaEmbeddingFunction(
+            url=f"{OLLAMA_BASE_URL}/api/embeddings",
+            model_name=OLLAMA_MODEL
+        )
+        self._initialize_collections()
+
+    def _create_client(self):
+        self.client = chromadb.PersistentClient(
+            path=self.persist_directory,
+            settings=Settings(anonymized_telemetry=False)
+        )
+
+    @staticmethod
+    def _is_schema_mismatch(error: Exception) -> bool:
+        msg = str(error).lower()
+        return (
+            "no such column: collections.topic" in msg
+            or "no such table: collections" in msg
+            or "database schema" in msg
+        )
+
+    def _reset_persist_directory(self):
+        if os.path.exists(self.persist_directory):
+            shutil.rmtree(self.persist_directory, ignore_errors=True)
+        os.makedirs(self.persist_directory, exist_ok=True)
+
+    def _initialize_collections(self):
+        self._create_client()
+        try:
+            self.rules_collection = self.client.get_or_create_collection(
+                name="tax_rules",
+                embedding_function=self.ollama_ef
+            )
+            self.user_data_collection = self.client.get_or_create_collection(
+                name="user_data",
+                embedding_function=self.ollama_ef
+            )
+        except Exception as e:
+            if not self._is_schema_mismatch(e):
+                raise
+
+            # Old/incompatible Chroma sqlite schema found; rebuild local vector store.
+            print("Chroma schema mismatch detected. Rebuilding local vector store...")
+            self._reset_persist_directory()
+            self._create_client()
+            try:
+                self.rules_collection = self.client.get_or_create_collection(
+                    name="tax_rules",
+                    embedding_function=self.ollama_ef
+                )
+                self.user_data_collection = self.client.get_or_create_collection(
+                    name="user_data",
+                    embedding_function=self.ollama_ef
+                )
+            except Exception as second_error:
+                raise RuntimeError(
+                    f"Chroma re-initialization failed after rebuild: {second_error}"
+                ) from second_error
 
     def index_user_document(self, user_id: int, doc_type: str, financial_year: str, data: Dict[str, Any]):
         """
@@ -110,7 +139,7 @@ class RAGEngine:
                 # METADATA IS KEY: This allows us to filter later
                 metadatas.append({
                     "user_id": user_id,
-                    "year": financial_year,
+                    "financial_year": financial_year,
                     "doc_type": doc_type,
                     "field": clean_key
                 })
@@ -118,31 +147,32 @@ class RAGEngine:
 
         process_json(data)
 
-        if chunks:
-            # Clear previous entries for this specific document to avoid duplicates
-            try:
-                # Note: ChromaDB delete filter structure:
-                self.user_data.delete(where={
+        # Clear out old data for this user, doc type, and year to prevent duplicates
+        try:
+            self.user_data_collection.delete(
+                where={
                     "$and": [
                         {"user_id": user_id},
-                        {"year": financial_year},
+                        {"financial_year": financial_year},
                         {"doc_type": doc_type}
                     ]
-                })
-                print(f"Cleared previous index for {doc_type} FY {financial_year}")
-            except Exception as e:
-                print(f"Error clearing previous index: {e}")
+                }
+            )
+            print(f"Cleared previous index for {doc_type} FY {financial_year}")
+        except Exception as e:
+            print(f"Error clearing previous index: {e}")
 
-            # Add new chunks
-            try:
-                self.user_data.add(
+        # Add new data
+        try:
+            if chunks:
+                self.user_data_collection.add(
                     documents=chunks,
                     metadatas=metadatas,
                     ids=ids
                 )
                 print(f"Indexed {len(chunks)} chunks for {doc_type} FY {financial_year}")
-            except Exception as e:
-                print(f"Error adding to index: {e}")
+        except Exception as e:
+            print(f"Error adding to index: {e}")
 
     def search_context(self, query: str, user_id: int, financial_year: Optional[str] = None) -> str:
         """
@@ -152,7 +182,7 @@ class RAGEngine:
 
         # 1. Fetch relevant generic tax rules
         try:
-            rule_results = self.rules.query(
+            rule_results = self.rules_collection.query(
                 query_texts=[query],
                 n_results=2
             )
@@ -170,7 +200,7 @@ class RAGEngine:
             where_filter = {
                 "$and": [
                     {"user_id": user_id},
-                    {"year": financial_year}
+                    {"financial_year": financial_year}
                 ]
             }
             header = f"USER DATA (FY {financial_year}):"
@@ -178,7 +208,7 @@ class RAGEngine:
             header = "USER DATA (ALL YEARS):"
 
         try:
-            user_results = self.user_data.query(
+            user_results = self.user_data_collection.query(
                 query_texts=[query],
                 n_results=5,
                 where=where_filter
@@ -191,3 +221,44 @@ class RAGEngine:
             print(f"Error querying user data: {e}")
 
         return "\n\n".join(context_parts)
+
+    def get_relevant_rules(self, query: str, n_results: int = 5) -> List[str]:
+        """
+        Retrieve relevant tax rules based on a query.
+        """
+        try:
+            rule_results = self.rules_collection.query(
+                query_texts=[query],
+                n_results=n_results
+            )
+            return rule_results.get('documents', [[]])[0]
+        except Exception as e:
+            print(f"Error querying rules: {e}")
+            return []
+
+
+class NullRAGEngine:
+    """No-op fallback used when Chroma cannot be initialized."""
+
+    def index_user_document(self, user_id: int, doc_type: str, financial_year: str, data: Dict[str, Any]):
+        print("RAG disabled: skipping document indexing.")
+
+    def search_context(self, query: str, user_id: int, financial_year: Optional[str] = None) -> str:
+        return ""
+
+    def get_relevant_rules(self, query: str, n_results: int = 5) -> List[str]:
+        return []
+
+
+_rag_singleton: Optional[Any] = None
+
+
+def get_rag_engine() -> Any:
+    global _rag_singleton
+    if _rag_singleton is None:
+        try:
+            _rag_singleton = RAGEngine()
+        except Exception as e:
+            print(f"RAG initialization failed, continuing with fallback mode: {e}")
+            _rag_singleton = NullRAGEngine()
+    return _rag_singleton

@@ -5,12 +5,12 @@ from models import User, TaxComputation, Conversation, Message
 from schemas import QuestionRequest, QuestionResponse, ConversationResponse, ConversationCreate, MessageResponse
 from dependencies import get_current_user
 from utils.ollama_client import get_tax_advice, call_ollama
-from utils.rag_engine import RAGEngine
+from utils.rag_engine import get_rag_engine
 from typing import List
 from datetime import datetime
 
 router = APIRouter()
-rag = RAGEngine()
+rag = get_rag_engine()
 
 @router.post("/conversations", response_model=ConversationResponse)
 def create_conversation(

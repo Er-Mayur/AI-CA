@@ -6,9 +6,15 @@ from models import User, Document, TaxComputation, ActivityHistory, Verification
 from schemas import TaxComputationResponse, TaxComputationDetail
 from dependencies import get_current_user
 from utils.tax_calculator import calculate_comprehensive_tax, calculate_age
-from utils.helper_report_generator import generate_helper_report
+try:
+    from utils.helper_report_generator import generate_helper_report
+except Exception:
+    generate_helper_report = None
 from utils.rules_service import RulesService, TaxRulesNotFoundError
 from utils.ollama_client import detect_itr_form_with_ai
+from utils.pdf_processor import extract_text_from_pdf_advanced
+from utils.smart_extractor import extract_with_smart_extractor
+import os
 from datetime import datetime
 
 router = APIRouter()
@@ -33,6 +39,47 @@ def calculate_tax(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No verified documents found. Please upload and verify documents first."
         )
+
+    # Recover stale extraction rows (older uploads may contain mostly zeros due previous OCR parser behavior).
+    refreshed_any = False
+    for doc in documents:
+        data = doc.extracted_data or {}
+        has_key_financial_values = any(
+            _safe_float(data.get(key, 0)) > 0
+            for key in [
+                "gross_total_income",
+                "gross_salary",
+                "salary_income",
+                "total_income",
+                "total_tds",
+            ]
+        )
+
+        if has_key_financial_values:
+            continue
+
+        if not doc.file_path or not os.path.exists(doc.file_path):
+            continue
+
+        try:
+            print(f"🔄 Re-extracting stale data for {doc.doc_type.value} (document_id={doc.id})...")
+            text = extract_text_from_pdf_advanced(doc.file_path)
+            recovered = extract_with_smart_extractor(
+                text=text,
+                user_name=current_user.name,
+                user_pan=current_user.pan_card,
+                expected_fy=financial_year,
+            )
+            recovered["_recovered_during_tax_calc"] = True
+            doc.extracted_data = recovered
+            refreshed_any = True
+        except Exception as e:
+            print(f"⚠️ Failed to re-extract stale document {doc.id}: {e}")
+
+    if refreshed_any:
+        db.commit()
+        for doc in documents:
+            db.refresh(doc)
     
     # Aggregate extracted data from all documents
     aggregated_data = aggregate_document_data(documents)
@@ -762,6 +809,12 @@ def download_itr1_report(
         TaxComputation.user_id == current_user.id,
         TaxComputation.financial_year == financial_year
     ).first()
+
+    if generate_helper_report is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ITR helper PDF generation is unavailable. Missing dependency: reportlab."
+        )
     
     if not computation:
         raise HTTPException(

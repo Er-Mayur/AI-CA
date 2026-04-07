@@ -62,11 +62,21 @@ class DocumentResponse(BaseModel):
     doc_type: DocType
     file_path: str
     verification_status: VerificationStatus
-    verification_message: Optional[str]
-    extracted_data: Optional[Dict[str, Any]]
+    verification_message: Optional[str] = None
+    processing_status: str # Changed from Optional[str]
+    extracted_data: Optional[Dict[str, Any]] = None
     uploaded_at: datetime
     verified_at: Optional[datetime]
     
+    class Config:
+        from_attributes = True
+
+class DocumentStatusResponse(BaseModel):
+    id: int
+    processing_status: str
+    verification_status: str
+    verification_message: Optional[str] = None
+
     class Config:
         from_attributes = True
 

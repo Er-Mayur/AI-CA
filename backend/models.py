@@ -15,9 +15,15 @@ class DocType(str, enum.Enum):
     AIS = "AIS"
 
 class VerificationStatus(str, enum.Enum):
-    PENDING = "pending"
-    VERIFIED = "verified"
-    FAILED = "failed"
+    PENDING = "PENDING"
+    VERIFIED = "VERIFIED"
+    FAILED = "FAILED"
+
+class ProcessingStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
 
 class User(Base):
     __tablename__ = "users"
@@ -46,9 +52,10 @@ class Document(Base):
     financial_year = Column(String(20), nullable=False)  # e.g., "2024-25"
     doc_type = Column(Enum(DocType), nullable=False)
     file_path = Column(String(500), nullable=False)
-    verification_status = Column(Enum(VerificationStatus), default=VerificationStatus.PENDING)
-    verification_message = Column(Text, nullable=True)
-    extracted_data = Column(JSON, nullable=True)  # Store extracted data as JSON
+    verification_status = Column(String, default="PENDING")
+    verification_message = Column(String, nullable=True)
+    processing_status = Column(String, default=ProcessingStatus.PENDING)
+    extracted_data = Column(JSON)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     verified_at = Column(DateTime, nullable=True)
     
