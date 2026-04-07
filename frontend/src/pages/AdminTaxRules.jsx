@@ -413,7 +413,7 @@ function AdminTaxRules() {
         {/* JSON Editor Modal */}
         {showEditor && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+            <div className="bg-white rounded-2xl w-[96vw] max-w-none h-[96vh] flex flex-col">
               {/* Modal Header */}
               <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
                 <div>
@@ -474,12 +474,12 @@ function AdminTaxRules() {
               )}
 
               {/* Editor Content */}
-              <div className="flex-1 overflow-hidden p-6">
+              <div className="flex-1 min-h-0 overflow-hidden p-6">
                 <textarea
                   value={editJson}
                   onChange={(e) => handleJsonChange(e.target.value)}
                   disabled={editorMode === 'view'}
-                  className={`w-full h-full font-mono text-sm p-4 border rounded-lg resize-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                  className={`w-full h-full min-h-[68vh] font-mono text-base leading-6 p-5 border rounded-lg resize-y focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
                     editorMode === 'view' ? 'bg-gray-50 text-gray-600' : 'bg-white'
                   } ${jsonError ? 'border-red-300' : 'border-gray-300'}`}
                   placeholder="Enter tax rules JSON..."
