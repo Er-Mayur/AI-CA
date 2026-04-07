@@ -2,7 +2,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { 
   Brain, LayoutDashboard, FileText, Calculator, 
-  TrendingUp, MessageCircle, Award, LogOut, Menu, X, Calendar, Shield 
+  TrendingUp, MessageCircle, Award, LogOut, Menu, X, Calendar, Shield
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -94,7 +94,7 @@ function Layout({ children }) {
               </div>
 
               {/* User Profile */}
-              <div className="hidden lg:flex items-center gap-3 pl-3 border-l border-gray-200">
+              <Link to="/profile" className="hidden md:flex items-center gap-3 pl-3 border-l border-gray-200 hover:bg-gray-50 rounded-lg px-2 py-1 transition-colors" title="Open profile">
                 <div className="text-right">
                   <p className="text-sm font-semibold text-gray-900">{user?.name}</p>
                   <p className="text-xs text-gray-400 font-mono">{user?.pan_card}</p>
@@ -102,7 +102,7 @@ function Layout({ children }) {
                 <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 font-bold text-xs ring-2 ring-white shadow-sm">
                   {user?.name?.charAt(0) || 'U'}
                 </div>
-              </div>
+              </Link>
               
               {/* Logout */}
               <button

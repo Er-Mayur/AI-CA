@@ -12,6 +12,7 @@ import TaxCalculation from './pages/TaxCalculation'
 import Investments from './pages/Investments'
 import QnA from './pages/QnA'
 import Benefits from './pages/Benefits'
+import Profile from './pages/Profile'
 import AdminTaxRules from './pages/AdminTaxRules'
 
 // Protected Route Component
@@ -90,6 +91,12 @@ function App() {
           <Route path="/benefits" element={
             <ProtectedRoute>
               <Benefits />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <Profile />
             </ProtectedRoute>
           } />
           
