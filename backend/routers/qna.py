@@ -10,7 +10,6 @@ from typing import List
 from datetime import datetime
 
 router = APIRouter()
-rag = get_rag_engine()
 
 @router.post("/conversations", response_model=ConversationResponse)
 def create_conversation(
@@ -126,6 +125,7 @@ async def ask_question(
     
     context_text = ""
     try:
+        rag = get_rag_engine()
         # 1. Retrieve Context from RAG (Rules + User Documents)
         context_text = rag.search_context(
             query=question_data.question, 

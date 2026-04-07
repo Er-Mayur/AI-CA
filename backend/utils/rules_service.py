@@ -36,7 +36,7 @@ class RulesService:
         if not tax_rule:
             raise TaxRulesNotFoundError(
                 f"Tax rules not found for FY {self.financial_year}. "
-                f"Please run seed_tax_rules.py to populate the database."
+                "Please create and activate rules from the admin Tax Rules panel."
             )
         
         self._rules = tax_rule.rules_json

@@ -11,8 +11,6 @@ from datetime import datetime
 from utils.pdf_processor import verify_document, extract_document_data
 from utils.rag_engine import get_rag_engine
 
-rag = get_rag_engine()
-
 router = APIRouter()
 
 UPLOAD_DIR = "uploads"
@@ -90,6 +88,7 @@ async def verify_and_extract_task(document_id: int, db: Session):
         db.commit()
 
         # RAG Indexing
+        rag = get_rag_engine()
         rag.index_user_document(
             user_id=current_user.id,
             doc_type=document.doc_type.value,

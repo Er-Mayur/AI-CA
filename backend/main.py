@@ -1,3 +1,17 @@
+import os
+import warnings
+
+# Suppress known non-fatal SSL compatibility warning on macOS system Python.
+warnings.filterwarnings(
+    "ignore",
+    message="urllib3 v2 only supports OpenSSL 1.1.1+",
+)
+
+# Disable Chroma/PostHog telemetry globally for API runtime.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+os.environ.setdefault("CHROMA_ANONYMIZED_TELEMETRY", "FALSE")
+os.environ.setdefault("POSTHOG_DISABLED", "true")
+
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -8,7 +22,6 @@ import uvicorn
 from database import engine, get_db
 from models import Base
 from routers import auth, documents, tax, dashboard, qna, investments, admin
-from seed_tax_rules import seed_tax_rules
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -18,11 +31,6 @@ app = FastAPI(
     description="AI-driven tax computation and compliance dashboard for Indian income tax",
     version="1.0.0"
 )
-
-# Seed tax rules on startup
-@app.on_event("startup")
-def startup_event():
-    seed_tax_rules()
 
 # CORS middleware
 app.add_middleware(

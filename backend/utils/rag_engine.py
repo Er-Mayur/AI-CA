@@ -1,8 +1,35 @@
+import os
+import warnings
+
+# Disable Chroma telemetry explicitly before importing chromadb.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "FALSE")
+os.environ.setdefault("CHROMA_ANONYMIZED_TELEMETRY", "FALSE")
+os.environ.setdefault("POSTHOG_DISABLED", "true")
+
+# Avoid noisy urllib3 v2/OpenSSL warning on macOS system Python builds.
+warnings.filterwarnings(
+    "ignore",
+    message="urllib3 v2 only supports OpenSSL 1.1.1+",
+)
+
+# Chroma calls posthog.capture with positional args. Some posthog builds only
+# support keyword arguments, which causes noisy telemetry errors in logs.
+try:
+    import posthog
+
+    posthog.disabled = True
+
+    def _capture_noop(*args, **kwargs):
+        return None
+
+    posthog.capture = _capture_noop
+except Exception:
+    pass
+
 import chromadb
 from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 from chromadb.config import Settings
 import uuid
-import os
 import shutil
 import httpx
 from typing import List, Dict, Any, Optional
@@ -43,6 +70,7 @@ class RAGEngine:
             persist_directory = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 
         self.persist_directory = os.path.abspath(persist_directory)
+        self.storage_mode = "persistent"
         os.makedirs(self.persist_directory, exist_ok=True)
 
         self.ollama_ef = OllamaEmbeddingFunction(
@@ -51,10 +79,27 @@ class RAGEngine:
         )
         self._initialize_collections()
 
-    def _create_client(self):
-        self.client = chromadb.PersistentClient(
-            path=self.persist_directory,
-            settings=Settings(anonymized_telemetry=False)
+    def _create_client(self, persistent: bool = True):
+        if persistent:
+            self.storage_mode = "persistent"
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=False)
+            )
+        else:
+            self.storage_mode = "ephemeral"
+            self.client = chromadb.EphemeralClient(
+                settings=Settings(anonymized_telemetry=False)
+            )
+
+    def _create_collections(self):
+        self.rules_collection = self.client.get_or_create_collection(
+            name="tax_rules",
+            embedding_function=self.ollama_ef
+        )
+        self.user_data_collection = self.client.get_or_create_collection(
+            name="user_data",
+            embedding_function=self.ollama_ef
         )
 
     @staticmethod
@@ -72,37 +117,27 @@ class RAGEngine:
         os.makedirs(self.persist_directory, exist_ok=True)
 
     def _initialize_collections(self):
-        self._create_client()
+        self._create_client(persistent=True)
         try:
-            self.rules_collection = self.client.get_or_create_collection(
-                name="tax_rules",
-                embedding_function=self.ollama_ef
-            )
-            self.user_data_collection = self.client.get_or_create_collection(
-                name="user_data",
-                embedding_function=self.ollama_ef
-            )
+            self._create_collections()
         except Exception as e:
             if not self._is_schema_mismatch(e):
                 raise
 
             # Old/incompatible Chroma sqlite schema found; rebuild local vector store.
-            print("Chroma schema mismatch detected. Rebuilding local vector store...")
             self._reset_persist_directory()
-            self._create_client()
+            self._create_client(persistent=True)
             try:
-                self.rules_collection = self.client.get_or_create_collection(
-                    name="tax_rules",
-                    embedding_function=self.ollama_ef
-                )
-                self.user_data_collection = self.client.get_or_create_collection(
-                    name="user_data",
-                    embedding_function=self.ollama_ef
-                )
+                self._create_collections()
             except Exception as second_error:
-                raise RuntimeError(
-                    f"Chroma re-initialization failed after rebuild: {second_error}"
-                ) from second_error
+                # Final fallback: keep RAG available in-memory for this process.
+                self._create_client(persistent=False)
+                try:
+                    self._create_collections()
+                except Exception as third_error:
+                    raise RuntimeError(
+                        f"Chroma init failed (persistent + ephemeral): {third_error}"
+                    ) from third_error
 
     def index_user_document(self, user_id: int, doc_type: str, financial_year: str, data: Dict[str, Any]):
         """

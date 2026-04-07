@@ -18,6 +18,8 @@ email-validator==2.2.0
 pymupdf
 pymysql
 python-dotenv
-chromadb
+chromadb==1.4.1
+posthog==5.4.0
+urllib3<2
 reportlab
 
