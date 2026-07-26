@@ -34,7 +34,7 @@ function LandingPage() {
           </p>
           <div className="flex justify-center gap-4">
             <Link to="/register" className="btn-primary text-lg px-8 py-3">
-              Start Free Trial
+              Start Trial
             </Link>
             <button className="btn-secondary text-lg px-8 py-3">
               Watch Demo
@@ -134,7 +134,7 @@ function LandingPage() {
           <BenefitCard
             title="Stay Compliant"
             description="Always up-to-date with the latest tax rules and regulations"
-            stat="100% Accurate"
+            stat="High Accuracy"
           />
         </div>
       </section>

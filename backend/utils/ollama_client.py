@@ -443,15 +443,15 @@ async def generate_investment_suggestions(
     # Get tax slabs from rules and determine applicable rate
     slabs = rules_service.get_slabs("old_regime", 30)
     
-    # Calculate tax rate based on taxable income and slabs
-    tax_rate = 0.052  # Default 5% + cess
+    # Calculate marginal tax rate based on slab, then apply cess exactly once.
+    tax_rate = 0.05  # Base 5% default before cess
     for slab in slabs:
         slab_min = slab.get("min", 0)
         slab_max = slab.get("max") or float('inf')
         rate_percent = slab.get("rate_percent", 0)
         
         if slab_min <= taxable_income <= slab_max or (taxable_income > slab_min and slab_max == float('inf')):
-            tax_rate = (rate_percent / 100) * 1.04  # Add cess
+            tax_rate = (rate_percent / 100)
     
     # Get cess from rules
     cess_percent = rules_service.get_cess_percent()

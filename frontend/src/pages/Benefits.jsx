@@ -77,7 +77,8 @@ function Benefits() {
     )
   }
 
-  const totalSavings = (computation?.tax_savings || 0) + (suggestions?.potential_savings || 0)
+  const totalSavings = computation?.tax_savings || 0
+  const potentialAdditionalSavings = suggestions?.potential_savings || 0
 
   return (
     <Layout>
@@ -111,6 +112,11 @@ function Benefits() {
               <p className="text-sm opacity-90 mt-2">
                 For Financial Year {currentFY}
               </p>
+              {potentialAdditionalSavings > 0 && (
+                <p className="text-sm opacity-90 mt-1">
+                  Additional potential via investments: ₹{potentialAdditionalSavings.toLocaleString('en-IN')}
+                </p>
+              )}
             </div>
             <Award className="w-24 h-24 opacity-20" />
           </div>
@@ -158,16 +164,16 @@ function Benefits() {
             icon={<Zap className="w-8 h-8 text-yellow-600" />}
             title="Time Saved"
             description="Automated calculations and processing"
-            value="5+ Hours"
-            info="Estimated time saved"
+            value="Reduced Manual Effort "
+            info="Through AI-powered automation"
             color="yellow"
           />
 
           <BenefitCard
             icon={<CheckCircle className="w-8 h-8 text-teal-600" />}
             title="Accuracy"
-            description="AI-powered calculations with 100% accuracy"
-            value="100%"
+            description="AI-powered calculations with high accuracy"
+            value="High"
             info="Calculation accuracy"
             color="teal"
           />

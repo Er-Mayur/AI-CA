@@ -359,8 +359,6 @@ class BenefitsPDFGenerator:
         total_savings = 0
         if computation:
             total_savings += computation.get('tax_savings', 0)
-        if suggestions:
-            total_savings += suggestions.get('potential_savings', 0)
         
         savings_title_style = ParagraphStyle('SavingsTitle', parent=self.styles['Normal'], fontSize=12, alignment=1, textColor=colors.white)
         savings_value_style = ParagraphStyle('SavingsValue', parent=self.styles['Normal'], fontSize=28, alignment=1, textColor=colors.white, fontName='Helvetica-Bold')
